@@ -1,0 +1,115 @@
+import makeWASocket, {
+    useMultiFileAuthState,
+    DisconnectReason,
+    fetchLatestBaileysVersion
+} from "@whiskeysockets/baileys"
+
+import pino from "pino"
+import fs from "fs-extra"
+
+const WARN_FILE = "./warnings.json"
+
+if (!fs.existsSync(WARN_FILE)) {
+    fs.writeJsonSync(WARN_FILE, {})
+}
+
+async function startBot() {
+    const { state, saveCreds } = await useMultiFileAuthState("auth")
+    const { version } = await fetchLatestBaileysVersion()
+
+    const sock = makeWASocket({
+        version,
+        logger: pino({ level: "silent" }),
+        auth: state
+    })
+
+    sock.ev.on("creds.update", saveCreds)
+
+    // Connexion
+    sock.ev.on("connection.update", (update) => {
+        const { connection, lastDisconnect } = update
+
+        if (connection === "close") {
+            const shouldReconnect =
+                lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut
+            if (shouldReconnect) startBot()
+        }
+
+        if (connection === "open") {
+            console.log("✅ Bot connecté avec succès")
+        }
+    })
+
+    // Message de bienvenue
+    sock.ev.on("group-participants.update", async (update) => {
+        if (update.action === "add") {
+            for (let user of update.participants) {
+                await sock.sendMessage(update.id, {
+                    text: `👋 Bienvenue @${user.split("@")[0]} 
+
+📜 Règlement :
+1️⃣ Pas de liens
+2️⃣ Respect obligatoire
+3️⃣ Pas de spam
+
+⚠️ 3 avertissements = exclusion`,
+                    mentions: [user]
+                })
+            }
+        }
+    })
+
+    // Messages entrants
+    sock.ev.on("messages.upsert", async ({ messages }) => {
+        const msg = messages[0]
+        if (!msg.message || msg.key.fromMe) return
+
+        const jid = msg.key.remoteJid
+        if (!jid.endsWith("@g.us")) return
+
+        const text =
+            msg.message.conversation ||
+            msg.message.extendedTextMessage?.text ||
+            ""
+
+        const sender = msg.key.participant
+
+        const metadata = await sock.groupMetadata(jid)
+        const admins = metadata.participants
+            .filter(p => p.admin)
+            .map(p => p.id)
+
+        const isAdmin = admins.includes(sender)
+
+        // ===== Commande ping
+        if (text === "!ping") {
+            await sock.sendMessage(jid, { text: "🚀 Bot opérationnel" })
+        }
+
+        // ===== Suppression lien
+        const linkRegex = /(https?:\/\/|www\.)/i
+
+        if (linkRegex.test(text) && !isAdmin) {
+            await sock.sendMessage(jid, {
+                delete: msg.key
+            })
+
+            let warnings = await fs.readJson(WARN_FILE)
+            warnings[sender] = (warnings[sender] || 0) + 1
+            await fs.writeJson(WARN_FILE, warnings)
+
+            if (warnings[sender] >= 3) {
+                await sock.groupParticipantsUpdate(jid, [sender], "remove")
+                delete warnings[sender]
+                await fs.writeJson(WARN_FILE, warnings)
+            } else {
+                await sock.sendMessage(jid, {
+                    text: `⚠️ @${sender.split("@")[0]} avertissement ${warnings[sender]}/3`,
+                    mentions: [sender]
+                })
+            }
+        }
+    })
+}
+
+startBot()
