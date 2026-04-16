@@ -1,7 +1,7 @@
 {
-  "name": "whatsapp-bot",
+  "name": "whatsapp-advanced-bot",
   "version": "1.0.0",
-  "description": "Simple WhatsApp group bot",
+  "description": "Advanced WhatsApp Group Bot",
   "main": "index.js",
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.0",
-    "pino": "^8.17.0"
+    "pino": "^8.17.0",
+    "fs-extra": "^11.2.0"
   }
 }
